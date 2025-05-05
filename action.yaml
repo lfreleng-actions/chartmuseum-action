@@ -2,37 +2,212 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: 2025 The Linux Foundation
 
-# actions-template
-name: "🛠️ Actions Template"
-description: "Description of action"
-# Any relevant notes/observations can go here
+# chartmuseum-action
+name: "☸️ ChartMuseum Container"
+description: "Starts and runs a ChartMuseum Helm Chart repository"
 
 inputs:
-  input:
-    description: "Description of input"
+  # Mandatory
+  password:
+    description: "Password to access ChartMuseum service"
     required: true
     type: 'string'
+  # Optional
+  username:
+    description: "Username to access ChartMuseum service"
+    required: false
+    type: 'string'
+    default: 'chartmuseum'
+  port:
+    description: "TCP port on which server will listen"
+    required: false
+    type: 'string'
+    default: 8080
+  directory:
+    description: "Directory path to host Helm Charts"
+    required: false
+    type: 'string'
+    default: 'charts'
+  script:
+    # This is essentially a job; when finished the container will quit
+    description: "Shell code to execute against container"
+    required: false
+    type: 'string'
+  exec_time:
+    # In the absence of a script/job, run container for a fixed time
+    # Testing aid to help workflow development; not for production use
+    description: "Background container/service execution time"
+    required: false
+    type: 'string'
+    default: '120'
+  version:
+    description: "ghcr.io/helm/chartmuseum container version"
+    required: false
+    type: 'string'
+    default: 'v0.16.3'
+  purge_charts:
+    description: "Purges any previous charts content at server startup"
+    required: false
+    type: 'boolean'
+    default: false
+  exit:
+    description: "Terminates the background container when the job completes"
+    required: false
+    type: 'boolean'
+    default: true
+  debug:
+    description: "Enables Docker container debugging"
+    required: false
+    type: 'boolean'
+    default: false
 
 outputs:
-  output:
-    description: "Description of output"
-    value: ${{ steps.code.outputs.output }}
+  container:
+    description: "Running container ID"
+    value: ${{ steps.chartmuseum.outputs.cid }}
 
 runs:
   using: "composite"
   steps:
-    - name: "Friendly Name"
-      id: code
+    - name: 'Setup action/environment'
       shell: bash
       run: |
-        # Friendly Name
-        input="${{ inputs.input }}"
-        if [ -z "$input" ]; then
-          echo "Error: mandatory input was not set/configured ❌"
+        # Setup action/environment
+
+        # Validate action inputs
+        if [ -z "${{ inputs.password }}" ]; then
+          echo "Error: password is a mandatory input ❌"
+          exit 1
+        fi
+        if ! [[ "${{ inputs.port }}" =~ ^[0-9]+$ ]]; then
+          echo "Error: provided port must be a valid number ❌"
+          exit 1
+        fi
+        if ! [[ "${{ inputs.exec_time }}" =~ ^[0-9]+$ ]]; then
+          echo "Error: Execution time must be a positive integer ❌"
+          exit 1
+        fi
+        if [ ! -d "${{ inputs.directory }}" ]; then
+          echo "Creating local charts folder: ${{ inputs.directory }}"
+          mkdir "${{ inputs.directory }}"
+          chmod a+wr "${{ inputs.directory }}"
+        fi
+
+        echo "# ChartMuseum Action ☸️" >> "$GITHUB_STEP_SUMMARY"
+        if [ "${{ inputs.purge_charts }}" = 'true' ] && \
+          [ -d "${{ inputs.directory }}" ]; then
+          echo "Purging charts folder: ${{ inputs.directory }} ⚠️" \
+            >> "$GITHUB_STEP_SUMMARY"
+          echo "Purging charts folder: ${{ inputs.directory }} ⚠️"
+          rm -Rf "${{ inputs.directory }}/**"
+        fi
+
+    # Note: no requirement for separate caching layer; already bundled
+    - name: 'Docker Buildx'
+      # yamllint disable-line rule:line-length
+      uses: docker/setup-buildx-action@b5ca514318bd6ebac0fb2aedd5d36ec1b5c232a2 # v3.10.0
+      with:
+        version: latest
+
+    - name: 'Start ChartMuseum'
+      id: chartmuseum
+      shell: bash
+      run: |
+        # Start ChartMuseum
+        trap 'rm -f /tmp/chartmuseum.cid' EXIT
+        timeout 120 docker run -d --cidfile /tmp/chartmuseum.cid --rm \
+          -p ${{ inputs.port }}:${{ inputs.port }} \
+          -e DOCKER_BUILDKIT=1 \
+          -e DEBUG=${{ inputs.debug }} \
+          -e DISABLE_API=false \
+          -e BASIC_AUTH_USER=${{ inputs.username }} \
+          -e BASIC_AUTH_PASS=${{ inputs.password }} \
+          -e STORAGE=local \
+          -e STORAGE_LOCAL_ROOTDIR=${{ inputs.directory }} \
+          -v $(pwd)/${{ inputs.directory }}:/${{ inputs.directory }}:rw \
+            ghcr.io/helm/chartmuseum:${{ inputs.version }} || {
+            echo "Error: failed to start ChartMuseum container ❌"
+            exit 1
+          }
+        echo "Started ChartMuseum container with the following parameters:"
+        echo "Port: ${{ inputs.port }}"
+        echo "Directory: ${{ inputs.directory }}"
+        echo "Version: ${{ inputs.version }}"
+        echo "Debug mode: ${{ inputs.debug }}"
+        CID=$(cat /tmp/chartmuseum.cid)
+        echo "cid=$CID" >> "$GITHUB_ENV"
+        echo "cid=$CID" >> "$GITHUB_OUTPUT"
+
+    - name: "Validate API/service availability"
+      shell: bash
+      run: |
+        # Validate API/service availability
+        counter=0; timeout=20
+        url="http://127.0.0.1:8080/index.yaml"
+        auth_string="-u ${{ inputs.username }}:${{ inputs.password }}"
+        curl_cmd="curl -q -s -o /dev/null $auth_string"
+        while true; do
+          STATUS_CODE=$($curl_cmd -w "%{http_code}" $url || true)
+          if [ "$STATUS_CODE" -eq 200 ]; then
+            echo "ChartMuseum service active on port: ${{ inputs.port }} ✅" \
+              >> "$GITHUB_STEP_SUMMARY"
+            echo "ChartMuseum service active on port: ${{ inputs.port }} ✅"
+            break
+          else
+            sleep 1 # Wait a second then retry
+            counter=$((counter + 1))
+          fi
+          if [ "$counter" -gt "$timeout" ]; then
+            echo "Error: service startup timeout/expiry reached ❌"
+            exit 1
+          fi
+        done
+
+    - name: "Running ChartMuseum for: ${{ inputs.exec_time }}s"
+      if: inputs.script == '' && inputs.exit == 'true'
+      shell: bash
+      run: |
+        # Run ChartMuseum
+        echo "Running ChartMuseum service for: ${{ inputs.exec_time }}s ☸️" \
+          >> "$GITHUB_STEP_SUMMARY"
+        sleep "${{ inputs.exec_time }}"
+
+    - name: "Executing ChartMuseum script/job"
+      if: inputs.script != ''
+      shell: bash
+      run: |
+        # Executing ChartMuseum script/job
+        if [ -x "${{ inputs.script }}" ]; then
+          echo "Executing script: ${{ inputs.script }} ☸️" \
+            >> "$GITHUB_STEP_SUMMARY"
+          echo "Executing script: ${{ inputs.script }} ☸️"
+          "./${{ inputs.script }}"
+        else
+          echo "Error: script/job path was not executable ❌" \
+            >> "$GITHUB_STEP_SUMMARY"
+          echo "Error: script/job path was not executable ❌"
+          trap 'rm -f /tmp/chartmuseum.cid' EXIT
+          echo "Running: docker kill ${{ env.cid }}"
+          timeout 30 docker kill "${{ env.cid }}"
+          echo "Terminated Chartmuseum Container 🛑"
           exit 1
         fi
 
-        echo "output=$input" >> "$GITHUB_ENV"
-        echo "output=$input" >> "$GITHUB_OUTPUT"
-        echo "Action received: $input ✅"
-        echo "Action received: $input ✅" >> "$GITHUB_STEP_SUMMARY"
+    - name: "Terminate container when finished"
+      if: inputs.exit == 'true'
+      shell: bash
+      run: |
+        # Terminate container when finished
+        trap 'rm -f /tmp/chartmuseum.cid' EXIT
+        echo "Running: docker kill ${{ env.cid }}"
+        timeout 30 docker kill "${{ env.cid }}"
+        echo "Terminated Chartmuseum Container 🛑"
+
+    - name: "Container will continue/persist"
+      if: inputs.exit != 'true'
+      shell: bash
+      run: |
+        # Container will continue/persist
+        echo "Container has detached and will continue/persist" \
+          >> "$GITHUB_STEP_SUMMARY"
+        echo "Container has detached and will continue/persist"
