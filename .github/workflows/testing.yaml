@@ -3,62 +3,92 @@
 # SPDX-FileCopyrightText: 2025 The Linux Foundation
 
 # Action test/validation workflow
-name: "Test GitHub Action 🧪"
+name: 'Test GitHub Action 🧪'
 
 # yamllint disable-line rule:truthy
 on:
   workflow_dispatch:
   push:
-    branches: ["main"]
+    branches: ['main']
   pull_request:
-    branches: ["main"]
+    branches: ['main']
+
+concurrency:
+  group: "${{ github.workflow }}-${{ github.ref }}"
+  cancel-in-progress: true
 
 permissions: {}
 
 jobs:
   ### Test the GitHub Action in this Repository ###
   tests:
-    name: "Test local GitHub Action"
-    runs-on: ubuntu-24.04
+    name: 'Test local GitHub Action'
+    runs-on: 'ubuntu-24.04'
     permissions:
       contents: read
     steps:
-      - name: "Checkout repository"
+      - name: 'Checkout repository'
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
 
-      # Perform setup prior to running test(s)
-      - name: "Testing setup step"
+      - name: 'Create local job to execute'
         shell: bash
         run: |
-          # Testing setup step
-          echo "Testing setup step"
-          echo "Testing setup step/summary output" >> "$GITHUB_STEP_SUMMARY"
+          # Create local job to execute
+          touch job.sh
+          chmod a+x job.sh
+          echo 'echo "ChartMuseum job from: testing.yaml 🧪"' >> job.sh
 
-      - name: "Running local action: ${{ github.repository }}"
+      - name: "Running local action: ${{ github.repository }} [Run script]"
         uses: ./
         with:
-          input: "test input 💬"
+          password: "${{ secrets.github_token }}"
+          port: 8080
+          script: 'job.sh'
 
-      - name: "Validated local action: ${{ github.repository }}"
-        shell: bash
-        run: |
-          # Local action validation
-          echo "Validated local action: ${{ github.repository }}"
-          echo "Validation step summary output" >> "$GITHUB_STEP_SUMMARY"
+      - name: "Running local action: ${{ github.repository }} [Run for 15s]"
+        uses: ./
+        with:
+          password: "${{ secrets.github_token }}"
+          port: 8080
+          exec_time: 15
 
-      # yamllint disable-line rule:line-length
-      - name: "Running local action: ${{ github.repository }} [Override Failure]"
+      - name: "Running local action: ${{ github.repository }} [Failure test]"
         uses: ./
         id: failure
-        continue-on-error: true
         with:
-          invalid_input: "Some garbage"
+          password: "${{ secrets.github_token }}"
+          port: 8080
+          debug: true
+          script: 'garbage-path.sh'
+        continue-on-error: true
 
-      # Failure testing is also important
-      - name: "Error if step above did NOT fail"
+      - name: "Validate previous step failure"
         if: steps.failure.outcome == 'success'
         shell: bash
         run: |
-          # Error if step above did NOT fail
-          echo "Error: previous test step did NOT fail ❌"
+          # Validate previous step failure
+          echo "Error: previous step should have failed ❌"
           exit 1
+
+      - name: "Running local action: ${{ github.repository }} [Run script]"
+        uses: ./
+        with:
+          password: "${{ secrets.github_token }}"
+          port: 8080
+          purge_charts: true
+          script: 'job.sh'
+          # Should not cleanup container when job completes
+          exit: false
+
+      - name: "Verify background container still running"
+        shell: bash
+        run: |
+          # Verify background container still running
+          if [ -f /tmp/chartmuseum.cid ]; then
+            CONTAINER_ID=$(cat /tmp/chartmuseum.cid)
+            echo "Container ID from file: $CONTAINER_ID"
+          fi
+          if ! docker ps --no-trunc | grep "$CONTAINER_ID"; then
+            echo "Error: container should still be running ❌"
+            exit 1
+          fi
