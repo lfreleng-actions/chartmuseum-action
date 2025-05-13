@@ -2,6 +2,7 @@
 # SPDX-FileCopyrightText: 2025 The Linux Foundation
 
 # Temporary and binary files
+.env
 *~
 *.py[cod]
 *.so
@@ -58,3 +59,8 @@ MANIFEST
 
 # Node
 node_modules/*
+
+# Local debugging with nektos/act
+.secrets
+.actrc
+debug-local.sh

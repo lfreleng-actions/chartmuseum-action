@@ -7,59 +7,78 @@ name: "☸️ ChartMuseum Container"
 description: "Starts and runs a ChartMuseum Helm Chart repository"
 
 inputs:
+  # Note: type definitions are not supported in composite actions
+  # preserve here for documentation purposes
+  # IMPORTANT: Boolean inputs are provided as strings ('true'/'false')
+  # due to composite actions limitations
   # Mandatory
   password:
     description: "Password to access ChartMuseum service"
     required: true
-    type: 'string'
+    # type: 'string'
   # Optional
   username:
     description: "Username to access ChartMuseum service"
     required: false
-    type: 'string'
+    # type: 'string'
     default: 'chartmuseum'
   port:
     description: "TCP port on which server will listen"
     required: false
-    type: 'string'
-    default: 8080
+    # type: 'string'
+    default: '8080'
   directory:
     description: "Directory path to host Helm Charts"
     required: false
-    type: 'string'
+    # type: 'string'
     default: 'charts'
   script:
     # This is essentially a job; when finished the container will quit
     description: "Shell code to execute against container"
     required: false
-    type: 'string'
+    # type: 'string'
   exec_time:
     # In the absence of a script/job, run container for a fixed time
     # Testing aid to help workflow development; not for production use
     description: "Background container/service execution time"
     required: false
-    type: 'string'
+    # type: 'string'
     default: '120'
   version:
     description: "ghcr.io/helm/chartmuseum container version"
     required: false
-    type: 'string'
+    # type: 'string'
     default: 'v0.16.3'
   purge_charts:
     description: "Purges any previous charts content at server startup"
     required: false
-    type: 'boolean'
-    default: false
+    # type: 'boolean'
+    default: 'false'
   exit:
     description: "Terminates the background container when the job completes"
     required: false
-    type: 'boolean'
-    default: true
+    # type: 'boolean'
+    default: 'true'
+  check_service:
+    description: "Validates service availability after startup"
+    required: false
+    # type: 'boolean'
+    default: 'true'
   debug:
     description: "Enables Docker container debugging"
     required: false
-    type: 'boolean'
-    default: false
+    # type: 'boolean'
+    default: 'false'
+  enable_cache:
+    description: "Enable Docker layer and dependency caching for faster builds"
+    required: false
+    # type: 'boolean'
+    default: 'true'
+  cache_key_suffix:
+    description: "Additional suffix for cache keys to allow cache isolation"
+    required: false
+    # type: 'string'
+    default: ''
 
 outputs:
   container:
@@ -94,6 +113,16 @@ runs:
         fi
 
         echo "# ChartMuseum Action ☸️" >> "$GITHUB_STEP_SUMMARY"
+        if [ "${{ inputs.enable_cache }}" = "true" ]; then
+          echo "**Caching enabled** ✅" >> "$GITHUB_STEP_SUMMARY"
+          # Only show cache key suffix if it's not empty/default
+          if [ -n "${{ inputs.cache_key_suffix }}" ]; then
+            echo "- Cache key suffix: \`${{ inputs.cache_key_suffix }}\`" \
+              >> "$GITHUB_STEP_SUMMARY"
+          fi
+        else
+          echo "**Caching Status**: ❌ Disabled" >> "$GITHUB_STEP_SUMMARY"
+        fi
         if [ "${{ inputs.purge_charts }}" = 'true' ] && \
           [ -d "${{ inputs.directory }}" ]; then
           echo "Purging charts folder: ${{ inputs.directory }} ⚠️" \
@@ -102,20 +131,52 @@ runs:
           rm -Rf "${{ inputs.directory }}/**"
         fi
 
-    # Note: no requirement for separate caching layer; already bundled
+    # Enhanced Docker Buildx with caching support
     - name: 'Docker Buildx'
       # yamllint disable-line rule:line-length
-      uses: docker/setup-buildx-action@b5ca514318bd6ebac0fb2aedd5d36ec1b5c232a2 # v3.10.0
+      uses: docker/setup-buildx-action@18ce135bb5112fa8ce4ed6c17ab05699d7f3a5e0 # v3.11.0
       with:
         version: latest
+        driver-opts: |
+          image=moby/buildkit:latest
+          network=host
+
+    # Cache Docker layers for faster subsequent builds
+    - name: 'Cache Docker layers'
+      if: inputs.enable_cache == 'true'
+      # yamllint disable-line rule:line-length
+      uses: actions/cache@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
+      with:
+        path: /tmp/.buildx-cache
+        # yamllint disable-line rule:line-length
+        key: chartmuseum-docker-${{ runner.os }}-${{ inputs.version }}${{ inputs.cache_key_suffix }}
+        restore-keys: |
+          chartmuseum-docker-${{ runner.os }}-${{ inputs.version }}
+          chartmuseum-docker-${{ runner.os }}-
+          chartmuseum-docker-
+
+    # Pre-pull and cache the ChartMuseum Docker image
+    - name: 'Pre-pull ChartMuseum image'
+      if: inputs.enable_cache == 'true'
+      shell: bash
+      run: |
+        # Pre-pull ChartMuseum image for caching
+        echo "Pulling image: ghcr.io/helm/chartmuseum:${{ inputs.version }}"
+        docker pull ghcr.io/helm/chartmuseum:${{ inputs.version }} || {
+          echo "Warning: Failed to pre-pull image, will attempt during run"
+        }
+
 
     - name: 'Start ChartMuseum'
       id: chartmuseum
       shell: bash
       run: |
-        # Start ChartMuseum
-        trap 'rm -f /tmp/chartmuseum.cid' EXIT
-        timeout 120 docker run -d --cidfile /tmp/chartmuseum.cid --rm \
+        # Start ChartMuseum with enhanced caching
+        # Configure Docker to use cache-from for faster container starts
+        export DOCKER_BUILDKIT=1
+
+        echo "Starting ChartMuseum container with caching optimizations..."
+        docker run -d --name chartmuseum --cidfile /tmp/chartmuseum.cid --rm \
           -p ${{ inputs.port }}:${{ inputs.port }} \
           -e DOCKER_BUILDKIT=1 \
           -e DEBUG=${{ inputs.debug }} \
@@ -123,8 +184,10 @@ runs:
           -e BASIC_AUTH_USER=${{ inputs.username }} \
           -e BASIC_AUTH_PASS=${{ inputs.password }} \
           -e STORAGE=local \
-          -e STORAGE_LOCAL_ROOTDIR=${{ inputs.directory }} \
-          -v $(pwd)/${{ inputs.directory }}:/${{ inputs.directory }}:rw \
+          -e STORAGE_LOCAL_ROOTDIR=/${{ inputs.directory }} \
+          -e PORT=${{ inputs.port }} \
+          -v "$(pwd)/${{ inputs.directory }}":/${{ inputs.directory }}:rw \
+          --pull=missing \
             ghcr.io/helm/chartmuseum:${{ inputs.version }} || {
             echo "Error: failed to start ChartMuseum container ❌"
             exit 1
@@ -138,30 +201,32 @@ runs:
         echo "cid=$CID" >> "$GITHUB_ENV"
         echo "cid=$CID" >> "$GITHUB_OUTPUT"
 
-    - name: "Validate API/service availability"
+        # Give the service a moment to initialize
+        echo "Waiting for ChartMuseum service to initialize..."
+        sleep 3
+
+    - name: "Check container is running"
       shell: bash
       run: |
-        # Validate API/service availability
-        counter=0; timeout=20
-        url="http://127.0.0.1:8080/index.yaml"
-        auth_string="-u ${{ inputs.username }}:${{ inputs.password }}"
-        curl_cmd="curl -q -s -o /dev/null $auth_string"
-        while true; do
-          STATUS_CODE=$($curl_cmd -w "%{http_code}" $url || true)
-          if [ "$STATUS_CODE" -eq 200 ]; then
-            echo "ChartMuseum service active on port: ${{ inputs.port }} ✅" \
-              >> "$GITHUB_STEP_SUMMARY"
-            echo "ChartMuseum service active on port: ${{ inputs.port }} ✅"
-            break
-          else
-            sleep 1 # Wait a second then retry
-            counter=$((counter + 1))
-          fi
-          if [ "$counter" -gt "$timeout" ]; then
-            echo "Error: service startup timeout/expiry reached ❌"
-            exit 1
-          fi
-        done
+        # Check container is running
+        echo "Docker container status 💬"
+        docker ps -f name=chartmuseum
+
+    # Do NOT replace this availability check with a simple cURL command
+    - name: "Check service availability"
+      if: inputs.check_service == 'true'
+      # yamllint disable-line rule:line-length
+      uses: lfreleng-actions/http-api-tool-docker@6b063866da92d2ef7d997d3376ed75fc0df95acf # Latest
+      with:
+        url: 'http://localhost:${{ inputs.port }}/health'
+        auth_string: '${{ inputs.username }}:${{ inputs.password }}'
+        service_name: 'ChartMuseum'
+        expected_http_code: '200'
+        retries: '5'
+        initial_sleep_time: '2'
+        curl_timeout: '10'
+        max_response_time: '5'
+        debug: '${{ inputs.debug }}'
 
     - name: "Running ChartMuseum for: ${{ inputs.exec_time }}s"
       if: inputs.script == '' && inputs.exit == 'true'
@@ -181,14 +246,17 @@ runs:
           echo "Executing script: ${{ inputs.script }} ☸️" \
             >> "$GITHUB_STEP_SUMMARY"
           echo "Executing script: ${{ inputs.script }} ☸️"
-          "./${{ inputs.script }}"
+          # Export container ID as environment variable for the script
+          export cid="${{ env.cid }}"
+          "./${{ inputs.script }}" "${{ inputs.password }}"
         else
           echo "Error: script/job path was not executable ❌" \
             >> "$GITHUB_STEP_SUMMARY"
           echo "Error: script/job path was not executable ❌"
-          trap 'rm -f /tmp/chartmuseum.cid' EXIT
           echo "Running: docker kill ${{ env.cid }}"
           timeout 30 docker kill "${{ env.cid }}"
+          # Clean up container ID file after termination
+          rm -f /tmp/chartmuseum.cid
           echo "Terminated Chartmuseum Container 🛑"
           exit 1
         fi
@@ -197,11 +265,20 @@ runs:
       if: inputs.exit == 'true'
       shell: bash
       run: |
-        # Terminate container when finished
-        trap 'rm -f /tmp/chartmuseum.cid' EXIT
+        # Terminate container when finished with cache preservation
         echo "Running: docker kill ${{ env.cid }}"
         timeout 30 docker kill "${{ env.cid }}"
         echo "Terminated Chartmuseum Container 🛑"
+
+        # Clean up container ID file after termination
+        rm -f /tmp/chartmuseum.cid
+
+        # Preserve Docker layers in cache for next run
+        if [ "${{ inputs.enable_cache }}" = "true" ]; then
+          echo "Preserving Docker layers in cache for faster subsequent runs"
+          docker system prune -f --filter "until=24h" \
+            --filter "label!=keep-cache" || true
+        fi
 
     - name: "Container will continue/persist"
       if: inputs.exit != 'true'
