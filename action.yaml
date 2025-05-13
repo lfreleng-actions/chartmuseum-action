@@ -139,29 +139,15 @@ runs:
         echo "cid=$CID" >> "$GITHUB_OUTPUT"
 
     - name: "Validate API/service availability"
-      shell: bash
-      run: |
-        # Validate API/service availability
-        counter=0; timeout=20
-        url="http://127.0.0.1:8080/index.yaml"
-        auth_string="-u ${{ inputs.username }}:${{ inputs.password }}"
-        curl_cmd="curl -q -s -o /dev/null $auth_string"
-        while true; do
-          STATUS_CODE=$($curl_cmd -w "%{http_code}" $url || true)
-          if [ "$STATUS_CODE" -eq 200 ]; then
-            echo "ChartMuseum service active on port: ${{ inputs.port }} ✅" \
-              >> "$GITHUB_STEP_SUMMARY"
-            echo "ChartMuseum service active on port: ${{ inputs.port }} ✅"
-            break
-          else
-            sleep 1 # Wait a second then retry
-            counter=$((counter + 1))
-          fi
-          if [ "$counter" -gt "$timeout" ]; then
-            echo "Error: service startup timeout/expiry reached ❌"
-            exit 1
-          fi
-        done
+      # yamllint disable-line rule:line-length
+      uses: modeseven-lfreleng-actions/http-api-verify-action@initial-update  # ToDo: Testing
+      with:
+        service_name: 'ChartMuseum Service'
+        delay: 2
+        retries: 10
+        url: 'http://127.0.0.1:8080/index.yaml'
+        auth_string: "chartmuseum:${{ inputs.password }}"
+        debug: true
 
     - name: "Running ChartMuseum for: ${{ inputs.exec_time }}s"
       if: inputs.script == '' && inputs.exit == 'true'

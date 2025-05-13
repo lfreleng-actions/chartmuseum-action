@@ -49,3 +49,7 @@ steps:
 Uses the Docker container:
 
 [ghcr.io/helm/chartmuseum](https://github.com/helm/chartmuseum/pkgs/container/chartmuseum)
+
+Uses lfreleng-actions/http-api-verify-action to verify service availability:
+
+[lfreleng-actions/http-api-verify-action](https://github.com/modeseven-lfreleng-actions/http-api-verify-action)
