@@ -58,3 +58,8 @@ MANIFEST
 
 # Node
 node_modules/*
+
+# Local debugging with nektos/act
+.secrets
+.actrc
+debug-local.sh

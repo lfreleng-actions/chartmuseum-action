@@ -115,7 +115,7 @@ runs:
       run: |
         # Start ChartMuseum
         trap 'rm -f /tmp/chartmuseum.cid' EXIT
-        timeout 120 docker run -d --cidfile /tmp/chartmuseum.cid --rm \
+        docker run -d --name chartmuseum --cidfile /tmp/chartmuseum.cid --rm \
           -p ${{ inputs.port }}:${{ inputs.port }} \
           -e DOCKER_BUILDKIT=1 \
           -e DEBUG=${{ inputs.debug }} \
@@ -141,27 +141,36 @@ runs:
     - name: "Validate API/service availability"
       shell: bash
       run: |
-        # Validate API/service availability
-        counter=0; timeout=20
-        url="http://127.0.0.1:8080/index.yaml"
-        auth_string="-u ${{ inputs.username }}:${{ inputs.password }}"
-        curl_cmd="curl -q -s -o /dev/null $auth_string"
-        while true; do
-          STATUS_CODE=$($curl_cmd -w "%{http_code}" $url || true)
-          if [ "$STATUS_CODE" -eq 200 ]; then
-            echo "ChartMuseum service active on port: ${{ inputs.port }} ✅" \
-              >> "$GITHUB_STEP_SUMMARY"
-            echo "ChartMuseum service active on port: ${{ inputs.port }} ✅"
+        # Manual HTTP check with curl
+        echo "Docker process: $(docker ps -f name=chartmuseum)"
+        echo "Checking for ChartMuseum service on port: ${{ inputs.port }}"
+        for i in {1..30}; do
+          if curl -f -s --basic -u \
+             "${{ inputs.username }}:${{ inputs.password }}" \
+             "http://127.0.0.1:${{ inputs.port }}/index.yaml" > /dev/null; then
+            echo "ChartMuseum is ready! ✅"
             break
-          else
-            sleep 1 # Wait a second then retry
-            counter=$((counter + 1))
           fi
-          if [ "$counter" -gt "$timeout" ]; then
-            echo "Error: service startup timeout/expiry reached ❌"
-            exit 1
-          fi
+          echo "Attempt $i: ChartMuseum not ready yet..."
+          sleep 2
         done
+
+        # Final check
+        if ! curl -f -s --basic -u \
+           "${{ inputs.username }}:${{ inputs.password }}" \
+           "http://127.0.0.1:${{ inputs.port }}/index.yaml" > /dev/null; then
+          echo "Error: ChartMuseum failed to start properly ❌"
+          exit 1
+        fi
+
+    # - name: "Validate API/service availability"
+    #   # yamllint disable-line rule:line-length
+    #   uses: modeseven-lfreleng-actions/http-api-tool-docker@initial-update
+    #   with:
+    #     service_name: 'ChartMuseum Service'
+    #     retries: 10
+    #     url: 'http://127.0.0.1:${{ inputs.port }}/index.yaml'
+    #     auth_string: "${{ inputs.username }}:${{ inputs.password }}"
 
     - name: "Running ChartMuseum for: ${{ inputs.exec_time }}s"
       if: inputs.script == '' && inputs.exit == 'true'
