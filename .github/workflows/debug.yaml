@@ -1,0 +1,32 @@
+---
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: 2025 The Linux Foundation
+
+# Debug workflow for ChartMuseum action
+name: 'Debug ChartMuseum Action'
+
+on:
+  workflow_dispatch:
+
+jobs:
+  debug:
+    name: 'Debug ChartMuseum'
+    runs-on: 'ubuntu-latest'
+    steps:
+      - name: 'Checkout repository'
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: 'Create test job'
+        shell: bash
+        run: |
+          echo '#!/bin/bash' > test-job.sh
+          echo 'echo "Test job completed successfully"' >> test-job.sh
+          chmod +x test-job.sh
+
+      - name: "Test ChartMuseum with debug"
+        uses: ./
+        with:
+          password: "test-password-123"
+          port: 8080
+          debug: true
+          script: 'test-job.sh'

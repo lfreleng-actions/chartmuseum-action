@@ -44,12 +44,13 @@ jobs:
           password: "${{ secrets.github_token }}"
           port: 8080
           script: 'job.sh'
+          exit: false
 
       - name: "Running local action: ${{ github.repository }} [Run for 15s]"
         uses: ./
         with:
           password: "${{ secrets.github_token }}"
-          port: 8080
+          port: 8081
           exec_time: 15
 
       - name: "Running local action: ${{ github.repository }} [Failure test]"
@@ -57,7 +58,7 @@ jobs:
         id: failure
         with:
           password: "${{ secrets.github_token }}"
-          port: 8080
+          port: 8082
           debug: true
           script: 'garbage-path.sh'
         continue-on-error: true
@@ -74,7 +75,7 @@ jobs:
         uses: ./
         with:
           password: "${{ secrets.github_token }}"
-          port: 8080
+          port: 8083
           purge_charts: true
           script: 'job.sh'
           # Should not cleanup container when job completes
