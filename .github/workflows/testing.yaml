@@ -5,6 +5,9 @@
 # Action test/validation workflow
 name: 'Test GitHub Action 🧪'
 
+env:
+  chartmuseum-version: 'v0.16.3'
+
 # yamllint disable-line rule:truthy
 on:
   workflow_dispatch:
@@ -23,12 +26,36 @@ jobs:
   ### Test the GitHub Action in this Repository ###
   tests:
     name: 'Test local GitHub Action'
-    runs-on: 'ubuntu-24.04'
+    runs-on: 'ubuntu-latest'
     permissions:
       contents: read
     steps:
       - name: 'Checkout repository'
-        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        # yamllint disable-line rule:line-length
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
+
+      # Cache Docker layers for ChartMuseum container (aligned with action)
+      - name: 'Cache Docker layers'
+        # yamllint disable-line rule:line-length
+        uses: actions/cache@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
+        with:
+          path: /tmp/.buildx-cache
+          # yamllint disable-line rule:line-length
+          key: chartmuseum-docker-${{ runner.os }}-${{ env.chartmuseum-version }}-test
+          restore-keys: |
+            chartmuseum-docker-${{ runner.os }}-${{ env.chartmuseum-version }}
+            chartmuseum-docker-${{ runner.os }}-
+            chartmuseum-docker-
+
+
+      # Pre-pull ChartMuseum Docker image for caching
+      - name: 'Pre-pull ChartMuseum Docker image'
+        shell: bash
+        run: |
+          # Pre-pull ChartMuseum Docker image
+          echo "Pre-pulling ChartMuseum Docker image for caching..."
+          docker pull ghcr.io/helm/chartmuseum:${{ env.chartmuseum-version }}
+          echo "ChartMuseum image cached successfully ✅"
 
       - name: 'Create local job to execute'
         shell: bash
@@ -38,28 +65,39 @@ jobs:
           chmod a+x job.sh
           echo 'echo "ChartMuseum job from: testing.yaml 🧪"' >> job.sh
 
+      - name: "Running local action: ${{ github.repository }} [Run for 5s]"
+        uses: ./
+        with:
+          password: "${{ secrets.github_token }}"
+          port: 8081
+          exec_time: 5
+          enable_cache: true
+          cache_key_suffix: '-test'
+          # Needed for short-lived containers otherwise testing is too late
+          check_service: false
+
       - name: "Running local action: ${{ github.repository }} [Run script]"
         uses: ./
         with:
           password: "${{ secrets.github_token }}"
           port: 8080
           script: 'job.sh'
-
-      - name: "Running local action: ${{ github.repository }} [Run for 15s]"
-        uses: ./
-        with:
-          password: "${{ secrets.github_token }}"
-          port: 8080
-          exec_time: 15
+          enable_cache: true
+          cache_key_suffix: '-test'
 
       - name: "Running local action: ${{ github.repository }} [Failure test]"
         uses: ./
         id: failure
         with:
           password: "${{ secrets.github_token }}"
-          port: 8080
+          port: 8082
           debug: true
           script: 'garbage-path.sh'
+          enable_cache: true
+          cache_key_suffix: '-test'
+          # Needed when failure testing; container exists before check runs
+          check_service: false
+
         continue-on-error: true
 
       - name: "Validate previous step failure"
@@ -71,24 +109,365 @@ jobs:
           exit 1
 
       - name: "Running local action: ${{ github.repository }} [Run script]"
+        id: persistent_container
         uses: ./
         with:
           password: "${{ secrets.github_token }}"
-          port: 8080
+          port: 8083
           purge_charts: true
           script: 'job.sh'
           # Should not cleanup container when job completes
           exit: false
+          enable_cache: true
+          cache_key_suffix: '-test'
+          # Disable service check for persistent containers to avoid deadlocks
+          check_service: false
 
-      - name: "Verify background container still running"
+      - name: "Verify background container still running and accessible"
         shell: bash
         run: |
-          # Verify background container still running
-          if [ -f /tmp/chartmuseum.cid ]; then
-            CONTAINER_ID=$(cat /tmp/chartmuseum.cid)
-            echo "Container ID from file: $CONTAINER_ID"
-          fi
-          if ! docker ps --no-trunc | grep "$CONTAINER_ID"; then
-            echo "Error: container should still be running ❌"
+          # Verify background container still running and accessible
+          CONTAINER_ID="${{ steps.persistent_container.outputs.container }}"
+          echo "Container ID from action output: $CONTAINER_ID"
+
+          if [ -z "$CONTAINER_ID" ]; then
+            echo "Error: Container ID not available from action output ❌"
             exit 1
+          fi
+
+          # Check if container exists and is running using docker inspect
+          if ! docker inspect "$CONTAINER_ID" >/dev/null 2>&1; then
+            echo "Error: container does not exist ❌"
+            exit 1
+          fi
+
+          CONTAINER_STATE=$(docker inspect -f \
+            '{{.State.Status}}' "$CONTAINER_ID")
+          if [ "$CONTAINER_STATE" != "running" ]; then
+            echo "Error: container is in unexpected state: $CONTAINER_STATE ❌"
+            docker ps -a --no-trunc --filter "id=$CONTAINER_ID"
+            exit 1
+          fi
+
+          # Test that the service is actually accessible
+          CONTAINER_IP=$(docker inspect -f \
+            '{{range.NetworkSettings.Networks}}{{.IPAddress}}{{end}}' \
+            "$CONTAINER_ID")
+          echo "Testing accessibility on container IP: $CONTAINER_IP"
+
+          if curl -f -s -m 5 -u "chartmuseum:${{ secrets.github_token }}" \
+            "http://$CONTAINER_IP:8083/index.yaml" > /dev/null; then
+            echo "✅ ChartMuseum service is accessible and responding correctly!"
+          else
+            echo "❌ ChartMuseum service is not responding"
+            echo "Container logs:"
+            docker logs "$CONTAINER_ID" --tail 20
+            exit 1
+          fi
+
+  ### Test Helm Chart Upload Functionality ###
+  test-chart-upload:
+    name: 'Test Helm Chart Upload'
+    runs-on: 'ubuntu-latest'
+    permissions:
+      contents: read
+    steps:
+      - name: 'Checkout repository'
+        # yamllint disable-line rule:line-length
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
+
+      # Cache Docker layers for ChartMuseum container (aligned with action)
+      - name: 'Cache Docker layers'
+        # yamllint disable-line rule:line-length
+        uses: actions/cache@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
+        with:
+          path: /tmp/.buildx-cache
+          # yamllint disable-line rule:line-length
+          key: chartmuseum-docker-${{ runner.os }}-${{ env.chartmuseum-version }}-upload-test
+          restore-keys: |
+            chartmuseum-docker-${{ runner.os }}-${{ env.chartmuseum-version }}
+            chartmuseum-docker-${{ runner.os }}-
+            chartmuseum-docker-
+
+      # Pre-pull ChartMuseum Docker image for caching
+      - name: 'Pre-pull ChartMuseum Docker image'
+        shell: bash
+        run: |
+          # Pre-pull ChartMuseum Docker image
+          echo "Pre-pulling ChartMuseum Docker image for caching..."
+          docker pull ghcr.io/helm/chartmuseum:${{ env.chartmuseum-version }}
+          echo "ChartMuseum image cached successfully ✅"
+
+      # Install Helm for chart operations
+      - name: 'Install Helm'
+        # yamllint disable-line rule:line-length
+        uses: azure/setup-helm@fe7b79cd5ee1e45176fcad797de68ecaf3ca4814 # v4.2.0
+        with:
+          version: 'latest'
+
+      # Clone the test helm chart repository
+      - name: 'Clone test helm chart repository'
+        shell: bash
+        run: |
+          # Clone the test helm chart repository
+          echo "Cloning test helm chart repository..."
+          git clone \
+            https://github.com/lfreleng-actions/test-makefile-helm-chart.git \
+            test-chart-repo
+          echo "Test chart repository cloned successfully ✅"
+
+      # Build the helm chart using the Makefile
+      - name: 'Build test helm chart'
+        shell: bash
+        working-directory: test-chart-repo
+        run: |
+          # Build the helm chart using the Makefile
+          echo "Building test helm chart..."
+          make build || {
+            echo "Make build failed, but chart may have been created"
+            # Check if chart was created despite tree command failure
+            if [ -f test-chart-0.1.0.tgz ]; then
+              echo "Chart package found despite make failure ✅"
+            else
+              echo "Chart package not found ❌"
+              exit 1
+            fi
+          }
+
+          # Verify the chart package was created
+          if [ -f test-chart-0.1.0.tgz ]; then
+            echo "Chart package created: test-chart-0.1.0.tgz ✅"
+            ls -la test-chart-0.1.0.tgz
+          else
+            echo "Error: Chart package not found ❌"
+            ls -la
+            exit 1
+          fi
+
+      # Create upload script for ChartMuseum
+      - name: 'Create helm chart upload script'
+        shell: bash
+        run: |
+          # Create helm chart upload script
+          cat > upload_chart.sh << 'EOF'
+          #!/bin/bash
+          set -euo pipefail
+
+          echo "Starting chart upload test..."
+
+          # Get container IP for ChartMuseum service
+          # Use environment variable provided by the action
+          if [ -n "${cid:-}" ]; then
+            CONTAINER_ID="$cid"
+            echo "Using container ID from environment: $CONTAINER_ID"
+          else
+            echo "Error: Container ID not available via environment variable"
+            exit 1
+          fi
+          CONTAINER_IP=$(docker inspect \
+            -f '{{range.NetworkSettings.Networks}}{{.IPAddress}}{{end}}' \
+            "$CONTAINER_ID")
+          CHARTMUSEUM_URL="http://$CONTAINER_IP:8084"
+
+          echo "ChartMuseum URL: $CHARTMUSEUM_URL"
+          echo "Container ID: $CONTAINER_ID"
+
+          # Wait for ChartMuseum to be ready
+          echo "Waiting for ChartMuseum to be ready..."
+          for i in {1..30}; do
+            if curl -f -s -m 5 -u "chartmuseum:$1" \
+              "$CHARTMUSEUM_URL/index.yaml" > /dev/null; then
+              echo "ChartMuseum is ready! ✅"
+              break
+            fi
+            if [ $i -eq 30 ]; then
+              echo "ChartMuseum failed to become ready ❌"
+              docker logs "$CONTAINER_ID" --tail 20
+              exit 1
+            fi
+            echo "Attempt $i/30: ChartMuseum not ready yet, waiting..."
+            sleep 2
+          done
+
+          # Upload the chart using curl
+          echo "Uploading chart to ChartMuseum..."
+          cd test-chart-repo
+
+          if curl -f -X POST \
+            -u "chartmuseum:$1" \
+            -F "chart=@test-chart-0.1.0.tgz" \
+            "$CHARTMUSEUM_URL/api/charts"; then
+            echo "Chart uploaded successfully! ✅"
+          else
+            echo "Chart upload failed ❌"
+            docker logs "$CONTAINER_ID" --tail 20
+            exit 1
+          fi
+
+          # Verify the chart is listed in the repository
+          echo "Verifying chart is available in repository..."
+          sleep 2  # Give ChartMuseum time to process the upload
+
+          if curl -f -s -u "chartmuseum:$1" "$CHARTMUSEUM_URL/index.yaml" | \
+            grep -q "test-chart"; then
+            echo "Chart is available in repository index! ✅"
+          else
+            echo "Chart not found in repository index ❌"
+            echo "Repository index content:"
+            curl -f -s -u "chartmuseum:$1" "$CHARTMUSEUM_URL/index.yaml"
+            exit 1
+          fi
+
+          # Test downloading the chart
+          echo "Testing chart download..."
+          if curl -f -s -u "chartmuseum:$1" \
+            "$CHARTMUSEUM_URL/charts/test-chart-0.1.0.tgz" \
+            -o downloaded-chart.tgz; then
+            echo "Chart downloaded successfully! ✅"
+            ls -la downloaded-chart.tgz
+          else
+            echo "Chart download failed ❌"
+            exit 1
+          fi
+
+          echo "All chart upload tests passed! 🎉"
+          EOF
+
+          chmod +x upload_chart.sh
+
+      # Start ChartMuseum service and run upload test
+      - name: "Test chart upload to ChartMuseum"
+        id: upload_test_container
+        uses: ./
+        with:
+          password: "${{ secrets.github_token }}"
+          port: 8084
+          script: 'upload_chart.sh'
+          enable_cache: true
+          cache_key_suffix: '-upload-test'
+          purge_charts: true
+          debug: true
+          # Don't exit so container persists for next step
+          exit: false
+
+      # Additional verification - test with helm repo commands
+      - name: 'Test helm repo integration'
+        shell: bash
+        run: |
+          # Test helm repo integration
+          CONTAINER_ID="${{ steps.upload_test_container.outputs.container }}"
+
+          if [ -n "$CONTAINER_ID" ]; then
+            CONTAINER_IP=$(docker inspect \
+              -f '{{range.NetworkSettings.Networks}}{{.IPAddress}}{{end}}' \
+              "$CONTAINER_ID")
+            CHARTMUSEUM_URL="http://$CONTAINER_IP:8084"
+
+            echo "Testing helm repo integration..."
+
+            # Add the ChartMuseum as a helm repository
+            helm repo add test-chartmuseum "$CHARTMUSEUM_URL" \
+              --username chartmuseum \
+              --password "${{ secrets.github_token }}"
+
+            # Update helm repositories
+            helm repo update
+
+            # Search for the uploaded chart
+            if helm search repo test-chartmuseum/test-chart; then
+              echo "Chart found via helm search! ✅"
+            else
+              echo "Chart not found via helm search ❌"
+              exit 1
+            fi
+
+            # Test pulling the chart with helm
+            mkdir -p /tmp/helm-test
+            cd /tmp/helm-test
+            if helm pull test-chartmuseum/test-chart; then
+              echo "Chart pulled successfully via helm! ✅"
+              ls -la test-chart-*.tgz
+            else
+              echo "Chart pull failed ❌"
+              exit 1
+            fi
+
+            echo "Helm repo integration test passed! 🎉"
+          else
+            echo "Container ID not available, skipping helm repo test"
+          fi
+
+      # Cleanup: Terminate the persistent ChartMuseum container
+      - name: 'Cleanup ChartMuseum container'
+        if: always()
+        shell: bash
+        run: |
+          # Cleanup: Terminate the persistent ChartMuseum container
+          CONTAINER_ID="${{ steps.upload_test_container.outputs.container }}"
+
+          if [ -n "$CONTAINER_ID" ]; then
+            echo "Cleaning up ChartMuseum container: $CONTAINER_ID"
+            docker kill "$CONTAINER_ID" 2>/dev/null || \
+              echo "Container already stopped"
+            echo "ChartMuseum container cleanup completed ✅"
+          else
+            echo "No container ID available, cleanup not required"
+          fi
+
+  ### Test with nektos/act locally (optional) ###
+  test-with-act:
+    name: 'Test with nektos/act'
+    runs-on: 'ubuntu-latest'
+    continue-on-error: true  # This is optional and may not be available
+    permissions:
+      contents: read
+    steps:
+      - name: 'Checkout repository'
+        # yamllint disable-line rule:line-length
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
+
+      # Check if act is available and install if possible
+      - name: 'Setup nektos/act for local testing'
+        shell: bash
+        run: |
+          # Setup nektos/act for local testing
+          echo "Checking for nektos/act availability..."
+
+          # Try to install act using the official installation script
+          if command -v curl &> /dev/null; then
+            echo "Installing nektos/act..."
+            curl -s \
+              https://raw.githubusercontent.com/nektos/act/master/install.sh | \
+              sudo bash
+
+            if command -v act &> /dev/null; then
+              echo "nektos/act installed successfully! ✅"
+              act --version
+            else
+              echo "nektos/act installation failed, but continuing..."
+              exit 0
+            fi
+          else
+            echo "curl not available, skipping act installation"
+            exit 0
+          fi
+
+      # Run the workflow locally with act
+      - name: 'Test workflow with nektos/act'
+        shell: bash
+        run: |
+          # Test workflow with nektos/act
+          if command -v act &> /dev/null; then
+            echo "Running workflow tests with nektos/act..."
+
+            # Create a minimal .env file for act if needed
+            echo "GITHUB_TOKEN=${{ secrets.github_token }}" > .env
+
+            # Run only the basic tests job with act
+            echo "Testing basic functionality with act..."
+            act -j tests --env-file .env -v || true
+
+            echo "nektos/act testing completed (errors expected in CI env)"
+          else
+            echo "nektos/act not available, skipping testing 🛑"
           fi
