@@ -127,7 +127,7 @@ jobs:
         shell: bash
         run: |
           # Verify background container still running and accessible
-          CONTAINER_ID="${{ steps.persistent_container.outputs.container }}"
+          CONTAINER_ID="${{ steps.persistent_container.outputs.cid }}"
           echo "Container ID from action output: $CONTAINER_ID"
 
           if [ -z "$CONTAINER_ID" ]; then
@@ -355,7 +355,7 @@ jobs:
         shell: bash
         run: |
           # Test helm repo integration
-          CONTAINER_ID="${{ steps.upload_test_container.outputs.container }}"
+          CONTAINER_ID="${{ steps.upload_test_container.outputs.cid }}"
 
           if [ -n "$CONTAINER_ID" ]; then
             CONTAINER_IP=$(docker inspect \
@@ -403,7 +403,7 @@ jobs:
         shell: bash
         run: |
           # Cleanup: Terminate the persistent ChartMuseum container
-          CONTAINER_ID="${{ steps.upload_test_container.outputs.container }}"
+          CONTAINER_ID="${{ steps.upload_test_container.outputs.cid }}"
 
           if [ -n "$CONTAINER_ID" ]; then
             echo "Cleaning up ChartMuseum container: $CONTAINER_ID"
