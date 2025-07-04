@@ -93,20 +93,30 @@ builds and follow-up runs:
 
 <!-- markdownlint-disable MD013 -->
 
-| Name             | Required | Default     | Description                                                  |
-| ---------------- | -------- | ----------- | ------------------------------------------------------------ |
-| password         | True     |             | Password to access ChartMuseum service                       |
-| username         | False    | chartmuseum | Username to access ChartMuseum service                       |
-| port             | False    | 8080        | TCP port on which server will listen                        |
-| directory        | False    | charts      | Directory path to host Helm Charts                          |
-| script           | False    |             | Path to shell script containing chart publishing steps      |
-| exec_time        | False    | 120         | Background container/service execution time                 |
-| version          | False    | v0.16.3     | ghcr.io/helm/chartmuseum container version                  |
-| purge_charts     | False    | false       | Purges any previous charts content at server startup        |
-| exit             | False    | true        | Terminates the background container when the job completes  |
-| debug            | False    | false       | Enables Docker container debugging                          |
-| enable_cache     | False    | true        | Enable Docker layer caching for faster builds |
-| cache_key_suffix | False    |             | Extra suffix for cache keys to allow cache isolation   |
+| Name             | Required | Default     | Description                                                |
+| ---------------- | -------- | ----------- | ---------------------------------------------------------- |
+| password         | True     |             | Password to access ChartMuseum service                     |
+| username         | False    | chartmuseum | Username to access ChartMuseum service                     |
+| port             | False    | 8080        | TCP port on which server will listen                       |
+| directory        | False    | charts      | Directory path to host Helm Charts                         |
+| script           | False    |             | Path to shell script containing chart publishing steps     |
+| exec_time        | False    | 120         | Background container/service execution time                |
+| version          | False    | v0.16.3     | ghcr.io/helm/chartmuseum container version                 |
+| purge_charts     | False    | false       | Purges any previous charts content at server startup       |
+| exit             | False    | true        | Terminates the background container when the job completes |
+| debug            | False    | false       | Enables Docker container debugging                         |
+| enable_cache     | False    | true        | Enable Docker layer caching for faster builds              |
+| cache_key_suffix | False    |             | Extra suffix for cache keys to allow cache isolation       |
+
+<!-- markdownlint-enable MD013 -->
+
+## Outputs
+
+<!-- markdownlint-disable MD013 -->
+
+| Name | Description                                 |
+| ---- | ------------------------------------------- |
+| cid  | Container ID of running Chartmuseum service |
 
 <!-- markdownlint-enable MD013 -->
 

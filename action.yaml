@@ -81,7 +81,7 @@ inputs:
     default: ''
 
 outputs:
-  container:
+  cid:
     description: "Running container ID"
     value: ${{ steps.chartmuseum.outputs.cid }}
 
@@ -165,7 +165,6 @@ runs:
         docker pull ghcr.io/helm/chartmuseum:${{ inputs.version }} || {
           echo "Warning: Failed to pre-pull image, will attempt during run"
         }
-
 
     - name: 'Start ChartMuseum'
       id: chartmuseum
