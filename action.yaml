@@ -79,11 +79,20 @@ inputs:
     required: false
     # type: 'string'
     default: ''
+  helm_repo_name:
+    description: 'Sets up Chartmuseum as a named helm repository'
+    required: false
+    # Disable by setting to empty string in calling workflow
+    default: 'chartmuseum'
+    # type: 'string'
 
 outputs:
   cid:
     description: "Running container ID"
     value: ${{ steps.chartmuseum.outputs.cid }}
+  container_ip:
+    description: "IP address of the running container"
+    value: ${{ steps.chartmuseum.outputs.container_ip }}
 
 runs:
   using: "composite"
@@ -170,11 +179,11 @@ runs:
       id: chartmuseum
       shell: bash
       run: |
-        # Start ChartMuseum with enhanced caching
+        # Start ChartMuseum
         # Configure Docker to use cache-from for faster container starts
         export DOCKER_BUILDKIT=1
 
-        echo "Starting ChartMuseum container with caching optimizations..."
+        echo "Starting ChartMuseum..."
         docker run -d --name chartmuseum --cidfile /tmp/chartmuseum.cid --rm \
           -p ${{ inputs.port }}:${{ inputs.port }} \
           -e DOCKER_BUILDKIT=1 \
@@ -191,25 +200,27 @@ runs:
             echo "Error: failed to start ChartMuseum container ❌"
             exit 1
           }
-        echo "Started ChartMuseum container with the following parameters:"
+
+        # Capture container ID and IP address
+        cid=$(cat /tmp/chartmuseum.cid)
+        container_ip=$(docker inspect -f \
+          '{{.NetworkSettings.IPAddress}}' chartmuseum)
+
+        echo "cid=$cid" >> "$GITHUB_ENV"
+        echo "cid=$cid" >> "$GITHUB_OUTPUT"
+        echo "container_ip=$container_ip" >> "$GITHUB_ENV"
+        echo "container_ip=$container_ip" >> "$GITHUB_OUTPUT"
+
+        echo "ChartMuseum Container ☸️"
+        echo "IP address: $container_ip"
         echo "Port: ${{ inputs.port }}"
         echo "Directory: ${{ inputs.directory }}"
         echo "Version: ${{ inputs.version }}"
         echo "Debug mode: ${{ inputs.debug }}"
-        CID=$(cat /tmp/chartmuseum.cid)
-        echo "cid=$CID" >> "$GITHUB_ENV"
-        echo "cid=$CID" >> "$GITHUB_OUTPUT"
-
-        # Give the service a moment to initialize
-        echo "Waiting for ChartMuseum service to initialize..."
-        sleep 3
-
-    - name: "Check container is running"
-      shell: bash
-      run: |
-        # Check container is running
         echo "Docker container status 💬"
         docker ps -f name=chartmuseum
+        echo "Helm Repositories:"
+        helm repo list || true
 
     # Do NOT replace this availability check with a simple cURL command
     - name: "Check service availability"
@@ -217,15 +228,31 @@ runs:
       # yamllint disable-line rule:line-length
       uses: lfreleng-actions/http-api-tool-docker@6b063866da92d2ef7d997d3376ed75fc0df95acf # Latest
       with:
-        url: 'http://localhost:${{ inputs.port }}/health'
-        auth_string: '${{ inputs.username }}:${{ inputs.password }}'
+        url: "http://${{ env.container_ip}}:${{ inputs.port }}/health"
+        auth_string: "${{ inputs.username }}:${{ inputs.password }}"
         service_name: 'ChartMuseum'
         expected_http_code: '200'
         retries: '5'
         initial_sleep_time: '2'
         curl_timeout: '10'
         max_response_time: '5'
-        debug: '${{ inputs.debug }}'
+        debug: "${{ inputs.debug }}"
+
+    - name: "Adding Chartmuseum Helm repository: ${{ inputs.helm_repo_name }}"
+      if: inputs.helm_repo_name != ''
+      shell: bash
+      run: |
+        # Add as named Helm repository
+        helm repo add "${{ inputs.helm_repo_name }}" \
+          "http://${{ env.container_ip }}:${{ inputs.port }}" \
+          --username "${{ inputs.username }}" \
+          --password "${{ inputs.password }}"
+        helm repo update
+        echo "Added as Helm repository: ${{ inputs.helm_repo_name }}" \
+          >> "$GITHUB_STEP_SUMMARY"
+        echo "Added as Helm repository: ${{ inputs.helm_repo_name }}"
+        echo "Listing Helm repositories ☸️"
+        helm repo list
 
     - name: "Running ChartMuseum for: ${{ inputs.exec_time }}s"
       if: inputs.script == '' && inputs.exit == 'true'

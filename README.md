@@ -107,6 +107,7 @@ builds and follow-up runs:
 | debug            | False    | false       | Enables Docker container debugging                         |
 | enable_cache     | False    | true        | Enable Docker layer caching for faster builds              |
 | cache_key_suffix | False    |             | Extra suffix for cache keys to allow cache isolation       |
+| helm_repo_name   | False    | chartmuseum | Sets up Chartmuseum as a named helm repository             |
 
 <!-- markdownlint-enable MD013 -->
 
@@ -114,9 +115,10 @@ builds and follow-up runs:
 
 <!-- markdownlint-disable MD013 -->
 
-| Name | Description                                 |
-| ---- | ------------------------------------------- |
-| cid  | Container ID of running Chartmuseum service |
+| Name         | Description                                       |
+| ------------ | ------------------------------------------------- |
+| cid          | Container ID of running Chartmuseum service       |
+| container_ip | IP address where Chartmuseum service is available |
 
 <!-- markdownlint-enable MD013 -->
 
