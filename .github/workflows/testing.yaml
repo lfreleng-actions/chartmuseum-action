@@ -75,6 +75,7 @@ jobs:
           cache_key_suffix: '-test'
           # Needed for short-lived containers otherwise testing is too late
           check_service: false
+          helm_repo_name: ''
 
       - name: "Running local action: ${{ github.repository }} [Run script]"
         uses: ./
@@ -84,6 +85,7 @@ jobs:
           script: 'job.sh'
           enable_cache: true
           cache_key_suffix: '-test'
+          helm_repo_name: ''
 
       - name: "Running local action: ${{ github.repository }} [Failure test]"
         uses: ./
@@ -97,7 +99,7 @@ jobs:
           cache_key_suffix: '-test'
           # Needed when failure testing; container exists before check runs
           check_service: false
-
+          helm_repo_name: ''
         continue-on-error: true
 
       - name: "Validate previous step failure"
@@ -122,6 +124,7 @@ jobs:
           cache_key_suffix: '-test'
           # Disable service check for persistent containers to avoid deadlocks
           check_service: false
+          helm_repo_name: ''
 
       - name: "Verify background container still running and accessible"
         shell: bash
@@ -272,23 +275,6 @@ jobs:
           echo "ChartMuseum URL: $CHARTMUSEUM_URL"
           echo "Container ID: $CONTAINER_ID"
 
-          # Wait for ChartMuseum to be ready
-          echo "Waiting for ChartMuseum to be ready..."
-          for i in {1..30}; do
-            if curl -f -s -m 5 -u "chartmuseum:$1" \
-              "$CHARTMUSEUM_URL/index.yaml" > /dev/null; then
-              echo "ChartMuseum is ready! ✅"
-              break
-            fi
-            if [ $i -eq 30 ]; then
-              echo "ChartMuseum failed to become ready ❌"
-              docker logs "$CONTAINER_ID" --tail 20
-              exit 1
-            fi
-            echo "Attempt $i/30: ChartMuseum not ready yet, waiting..."
-            sleep 2
-          done
-
           # Upload the chart using curl
           echo "Uploading chart to ChartMuseum..."
           cd test-chart-repo
@@ -351,51 +337,29 @@ jobs:
           exit: false
 
       # Additional verification - test with helm repo commands
-      - name: 'Test helm repo integration'
+      - name: 'Test availability with Helm commands'
         shell: bash
         run: |
-          # Test helm repo integration
-          CONTAINER_ID="${{ steps.upload_test_container.outputs.cid }}"
+          # Test availability with Helm commands
 
-          if [ -n "$CONTAINER_ID" ]; then
-            CONTAINER_IP=$(docker inspect \
-              -f '{{range.NetworkSettings.Networks}}{{.IPAddress}}{{end}}' \
-              "$CONTAINER_ID")
-            CHARTMUSEUM_URL="http://$CONTAINER_IP:8084"
+          # Repository was configured automatically by action
+          helm repo list
+          # However, we need to rebuild the repository database
+          helm repo update
+          # Only then can we search for the chart uploaded by cURL
+          helm search repo chartmuseum
 
-            echo "Testing helm repo integration..."
-
-            # Add the ChartMuseum as a helm repository
-            helm repo add test-chartmuseum "$CHARTMUSEUM_URL" \
-              --username chartmuseum \
-              --password "${{ secrets.github_token }}"
-
-            # Update helm repositories
-            helm repo update
-
-            # Search for the uploaded chart
-            if helm search repo test-chartmuseum/test-chart; then
-              echo "Chart found via helm search! ✅"
-            else
-              echo "Chart not found via helm search ❌"
-              exit 1
-            fi
-
-            # Test pulling the chart with helm
-            mkdir -p /tmp/helm-test
-            cd /tmp/helm-test
-            if helm pull test-chartmuseum/test-chart; then
-              echo "Chart pulled successfully via helm! ✅"
-              ls -la test-chart-*.tgz
-            else
-              echo "Chart pull failed ❌"
-              exit 1
-            fi
-
-            echo "Helm repo integration test passed! 🎉"
+          # Test pulling the chart with helm
+          mkdir -p /tmp/helm-test
+          cd /tmp/helm-test
+          if helm pull chartmuseum/test-chart; then
+            echo "Chart pulled successfully via helm! ✅"
+            ls -la test-chart-*.tgz
           else
-            echo "Container ID not available, skipping helm repo test"
+            echo "Chart pull failed ❌"
+            exit 1
           fi
+          echo "Helm repo integration test passed! 🎉"
 
       # Cleanup: Terminate the persistent ChartMuseum container
       - name: 'Cleanup ChartMuseum container'
