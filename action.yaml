@@ -226,7 +226,7 @@ runs:
     - name: "Check service availability"
       if: inputs.check_service == 'true'
       # yamllint disable-line rule:line-length
-      uses: lfreleng-actions/http-api-tool-docker@7318bd02587e3ea4d8dfc834aba81645cb3116cc # v1.0.2
+      uses: lfreleng-actions/http-api-tool-docker@aa56b2ad9852f1e085a2f6239d6fcedbfc6bd208 # v1.0.3
       with:
         url: "http://${{ env.container_ip}}:${{ inputs.port }}/health"
         auth_string: "${{ inputs.username }}:${{ inputs.password }}"
