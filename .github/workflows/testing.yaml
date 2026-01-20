@@ -37,7 +37,7 @@ jobs:
       # Cache Docker layers for ChartMuseum container (aligned with action)
       - name: 'Cache Docker layers'
         # yamllint disable-line rule:line-length
-        uses: actions/cache@9255dc7a253b0ccc959486e2bca901246202afeb # v5.0.1
+        uses: actions/cache@8b402f58fbc84540c8b491a91e594a4576fec3d7 # v5.0.2
         with:
           path: /tmp/.buildx-cache
           # yamllint disable-line rule:line-length
@@ -182,7 +182,7 @@ jobs:
       # Cache Docker layers for ChartMuseum container (aligned with action)
       - name: 'Cache Docker layers'
         # yamllint disable-line rule:line-length
-        uses: actions/cache@9255dc7a253b0ccc959486e2bca901246202afeb # v5.0.1
+        uses: actions/cache@8b402f58fbc84540c8b491a91e594a4576fec3d7 # v5.0.2
         with:
           path: /tmp/.buildx-cache
           # yamllint disable-line rule:line-length
