@@ -103,42 +103,118 @@ runs:
         # Setup action/environment
 
         # Validate action inputs
-        if [ -z "${{ inputs.password }}" ]; then
+        if [ -z "${INPUTS_PASSWORD}" ]; then
           echo "Error: password is a mandatory input ❌"
           exit 1
         fi
-        if ! [[ "${{ inputs.port }}" =~ ^[0-9]+$ ]]; then
-          echo "Error: provided port must be a valid number ❌"
+        if ! [[ "${INPUTS_PORT}" =~ ^[0-9]+$ ]] || \
+          [ "${INPUTS_PORT}" -lt 1 ] || [ "${INPUTS_PORT}" -gt 65535 ]; then
+          echo "Error: port must be an integer in the range 1-65535 ❌"
           exit 1
         fi
-        if ! [[ "${{ inputs.exec_time }}" =~ ^[0-9]+$ ]]; then
+        if ! [[ "${INPUTS_EXEC_TIME}" =~ ^[1-9][0-9]*$ ]]; then
           echo "Error: Execution time must be a positive integer ❌"
           exit 1
         fi
-        if [ ! -d "${{ inputs.directory }}" ]; then
-          echo "Creating local charts folder: ${{ inputs.directory }}"
-          mkdir "${{ inputs.directory }}"
-          chmod a+wr "${{ inputs.directory }}"
+        # Constrain the charts directory before it is used for rm -Rf
+        # and a Docker bind mount. Rather than enumerate every unsafe
+        # spelling, canonicalise the value and require it to resolve to
+        # a path strictly inside the workspace. This rejects the
+        # workspace root in all its forms ('.', './', './.', './/', ...),
+        # absolute paths, any '..' traversal that escapes the workspace,
+        # and any symlink (the value is rejected outright if it is a
+        # symlink, regardless of its target). '..' segments that still
+        # resolve inside the workspace (e.g. 'a/../b') are permitted
+        # because they are safe. A ':' is rejected separately because it
+        # would corrupt the Docker '-v host:container' spec.
+        if [ -z "${INPUTS_DIRECTORY}" ]; then
+          echo "Error: directory must not be empty ❌"
+          exit 1
+        fi
+        case "${INPUTS_DIRECTORY}" in
+          *:*)
+            echo "Error: directory must not contain ':' characters ❌"
+            exit 1
+            ;;
+        esac
+        # Normalise away trailing '/' and '/.' segments so 'test -L'
+        # examines the final path component itself rather than
+        # dereferencing it (test -L link/ and test -L link/. both follow
+        # the link). Symlinks whose target escapes the workspace are
+        # additionally caught by the containment check below.
+        norm_dir="${INPUTS_DIRECTORY}"
+        while :; do
+          case "${norm_dir}" in
+            */) norm_dir="${norm_dir%/}" ;;
+            */.) norm_dir="${norm_dir%/.}" ;;
+            *) break ;;
+          esac
+        done
+        if [ -L "${norm_dir:-${INPUTS_DIRECTORY}}" ]; then
+          echo "Error: directory must not be a symlink ❌"
+          exit 1
+        fi
+        workspace_dir="$(realpath -- "$PWD")"
+        resolved_dir="$(realpath -m -- "${INPUTS_DIRECTORY}")"
+        case "${resolved_dir}" in
+          "${workspace_dir}")
+            echo "Error: directory must not be the workspace root ❌"
+            exit 1
+            ;;
+          "${workspace_dir}"/*)
+            : # resolves to a path strictly inside the workspace - OK
+            ;;
+          *)
+            echo "Error: directory must resolve inside the workspace ❌"
+            exit 1
+            ;;
+        esac
+        if [ -e "${resolved_dir}" ] && [ ! -d "${resolved_dir}" ]; then
+          echo "Error: directory path exists but is not a directory ❌"
+          exit 1
+        fi
+        if [ ! -d "${INPUTS_DIRECTORY}" ]; then
+          echo "Creating local charts folder: ${INPUTS_DIRECTORY}"
+          mkdir -p -- "${INPUTS_DIRECTORY}"
+          chmod a+wr -- "${INPUTS_DIRECTORY}"
         fi
 
         echo "# ChartMuseum Action ☸️" >> "$GITHUB_STEP_SUMMARY"
-        if [ "${{ inputs.enable_cache }}" = "true" ]; then
+        if [ "${INPUTS_ENABLE_CACHE}" = "true" ]; then
           echo "**Caching enabled** ✅" >> "$GITHUB_STEP_SUMMARY"
           # Only show cache key suffix if it's not empty/default
-          if [ -n "${{ inputs.cache_key_suffix }}" ]; then
-            echo "- Cache key suffix: \`${{ inputs.cache_key_suffix }}\`" \
+          if [ -n "${INPUTS_CACHE_KEY_SUFFIX}" ]; then
+            echo "- Cache key suffix: \`${INPUTS_CACHE_KEY_SUFFIX}\`" \
               >> "$GITHUB_STEP_SUMMARY"
           fi
         else
           echo "**Caching Status**: ❌ Disabled" >> "$GITHUB_STEP_SUMMARY"
         fi
-        if [ "${{ inputs.purge_charts }}" = 'true' ] && \
-          [ -d "${{ inputs.directory }}" ]; then
-          echo "Purging charts folder: ${{ inputs.directory }} ⚠️" \
+        if [ "${INPUTS_PURGE_CHARTS}" = 'true' ] && \
+          [ -d "${INPUTS_DIRECTORY}" ]; then
+          echo "Purging charts folder: ${INPUTS_DIRECTORY} ⚠️" \
             >> "$GITHUB_STEP_SUMMARY"
-          echo "Purging charts folder: ${{ inputs.directory }} ⚠️"
-          rm -Rf "${{ inputs.directory }}/**"
+          echo "Purging charts folder: ${INPUTS_DIRECTORY} ⚠️"
+          # Enable dotglob so hidden files are purged too, and nullglob
+          # so an empty directory expands to nothing rather than a
+          # literal '*'. Collect matches into an array and only invoke
+          # rm when there is something to remove, so an empty directory
+          # does not call rm with no operands.
+          shopt -s dotglob nullglob
+          purge_entries=( "${INPUTS_DIRECTORY:?}"/* )
+          shopt -u dotglob nullglob
+          if [ "${#purge_entries[@]}" -gt 0 ]; then
+            rm -Rf -- "${purge_entries[@]}"
+          fi
         fi
+      env:
+        INPUTS_PASSWORD: ${{ inputs.password }}
+        INPUTS_PORT: ${{ inputs.port }}
+        INPUTS_EXEC_TIME: ${{ inputs.exec_time }}
+        INPUTS_DIRECTORY: ${{ inputs.directory }}
+        INPUTS_ENABLE_CACHE: ${{ inputs.enable_cache }}
+        INPUTS_CACHE_KEY_SUFFIX: ${{ inputs.cache_key_suffix }}
+        INPUTS_PURGE_CHARTS: ${{ inputs.purge_charts }}
 
     # Enhanced Docker Buildx with caching support
     - name: 'Docker Buildx'
@@ -170,10 +246,12 @@ runs:
       shell: bash
       run: |
         # Pre-pull ChartMuseum image for caching
-        echo "Pulling image: ghcr.io/helm/chartmuseum:${{ inputs.version }}"
-        docker pull ghcr.io/helm/chartmuseum:${{ inputs.version }} || {
+        echo "Pulling image: ghcr.io/helm/chartmuseum:${INPUTS_VERSION}"
+        docker pull "ghcr.io/helm/chartmuseum:${INPUTS_VERSION}" || {
           echo "Warning: Failed to pre-pull image, will attempt during run"
         }
+      env:
+        INPUTS_VERSION: ${{ inputs.version }}
 
     - name: 'Start ChartMuseum'
       id: chartmuseum
@@ -185,18 +263,18 @@ runs:
 
         echo "Starting ChartMuseum..."
         docker run -d --name chartmuseum --cidfile /tmp/chartmuseum.cid --rm \
-          -p ${{ inputs.port }}:${{ inputs.port }} \
+          -p "${INPUTS_PORT}:${INPUTS_PORT}" \
           -e DOCKER_BUILDKIT=1 \
-          -e DEBUG=${{ inputs.debug }} \
+          -e "DEBUG=${INPUTS_DEBUG}" \
           -e DISABLE_API=false \
-          -e BASIC_AUTH_USER=${{ inputs.username }} \
-          -e BASIC_AUTH_PASS=${{ inputs.password }} \
+          -e "BASIC_AUTH_USER=${INPUTS_USERNAME}" \
+          -e "BASIC_AUTH_PASS=${INPUTS_PASSWORD}" \
           -e STORAGE=local \
-          -e STORAGE_LOCAL_ROOTDIR=/${{ inputs.directory }} \
-          -e PORT=${{ inputs.port }} \
-          -v "$(pwd)/${{ inputs.directory }}":/${{ inputs.directory }}:rw \
+          -e "STORAGE_LOCAL_ROOTDIR=/${INPUTS_DIRECTORY}" \
+          -e "PORT=${INPUTS_PORT}" \
+          -v "$(pwd)/${INPUTS_DIRECTORY}:/${INPUTS_DIRECTORY}:rw" \
           --pull=missing \
-            ghcr.io/helm/chartmuseum:${{ inputs.version }} || {
+            "ghcr.io/helm/chartmuseum:${INPUTS_VERSION}" || {
             echo "Error: failed to start ChartMuseum container ❌"
             exit 1
           }
@@ -214,21 +292,26 @@ runs:
             '{{.NetworkSettings.IPAddress}}' chartmuseum)
         fi
 
-        echo "cid=$cid" >> "$GITHUB_ENV"
         echo "cid=$cid" >> "$GITHUB_OUTPUT"
-        echo "container_ip=$container_ip" >> "$GITHUB_ENV"
         echo "container_ip=$container_ip" >> "$GITHUB_OUTPUT"
 
         echo "ChartMuseum Container ☸️"
         echo "IP address: $container_ip"
-        echo "Port: ${{ inputs.port }}"
-        echo "Directory: ${{ inputs.directory }}"
-        echo "Version: ${{ inputs.version }}"
-        echo "Debug mode: ${{ inputs.debug }}"
+        echo "Port: ${INPUTS_PORT}"
+        echo "Directory: ${INPUTS_DIRECTORY}"
+        echo "Version: ${INPUTS_VERSION}"
+        echo "Debug mode: ${INPUTS_DEBUG}"
         echo "Docker container status 💬"
         docker ps -f name=chartmuseum
         echo "Helm Repositories:"
         helm repo list || true
+      env:
+        INPUTS_PORT: ${{ inputs.port }}
+        INPUTS_DEBUG: ${{ inputs.debug }}
+        INPUTS_USERNAME: ${{ inputs.username }}
+        INPUTS_PASSWORD: ${{ inputs.password }}
+        INPUTS_DIRECTORY: ${{ inputs.directory }}
+        INPUTS_VERSION: ${{ inputs.version }}
 
     # Do NOT replace this availability check with a simple cURL command
     - name: "Check service availability"
@@ -236,7 +319,8 @@ runs:
       # yamllint disable-line rule:line-length
       uses: lfreleng-actions/http-api-tool-docker@83ea11f0f2fa02b00192e4f364c764a2b1c0bf8d # v1.0.6
       with:
-        url: "http://${{ env.container_ip}}:${{ inputs.port }}/health"
+        # yamllint disable-line rule:line-length
+        url: "http://${{ steps.chartmuseum.outputs.container_ip }}:${{ inputs.port }}/health"
         auth_string: "${{ inputs.username }}:${{ inputs.password }}"
         service_name: 'ChartMuseum'
         expected_http_code: '200'
@@ -251,68 +335,89 @@ runs:
       shell: bash
       run: |
         # Add as named Helm repository
-        helm repo add "${{ inputs.helm_repo_name }}" \
-          "http://${{ env.container_ip }}:${{ inputs.port }}" \
-          --username "${{ inputs.username }}" \
-          --password "${{ inputs.password }}"
+        helm repo add "${INPUTS_HELM_REPO_NAME}" \
+          "http://${container_ip}:${INPUTS_PORT}" \
+          --username "${INPUTS_USERNAME}" \
+          --password "${INPUTS_PASSWORD}"
         helm repo update
-        echo "Added as Helm repository: ${{ inputs.helm_repo_name }}" \
+        echo "Added as Helm repository: ${INPUTS_HELM_REPO_NAME}" \
           >> "$GITHUB_STEP_SUMMARY"
-        echo "Added as Helm repository: ${{ inputs.helm_repo_name }}"
+        echo "Added as Helm repository: ${INPUTS_HELM_REPO_NAME}"
         echo "Listing Helm repositories ☸️"
         helm repo list
+      env:
+        INPUTS_HELM_REPO_NAME: ${{ inputs.helm_repo_name }}
+        INPUTS_PORT: ${{ inputs.port }}
+        INPUTS_USERNAME: ${{ inputs.username }}
+        INPUTS_PASSWORD: ${{ inputs.password }}
+        container_ip: ${{ steps.chartmuseum.outputs.container_ip }}
 
     - name: "Running ChartMuseum for: ${{ inputs.exec_time }}s"
       if: inputs.script == '' && inputs.exit == 'true'
       shell: bash
       run: |
         # Run ChartMuseum
-        echo "Running ChartMuseum service for: ${{ inputs.exec_time }}s ☸️" \
+        echo "Running ChartMuseum service for: ${INPUTS_EXEC_TIME}s ☸️" \
           >> "$GITHUB_STEP_SUMMARY"
-        sleep "${{ inputs.exec_time }}"
+        sleep "${INPUTS_EXEC_TIME}"
+      env:
+        INPUTS_EXEC_TIME: ${{ inputs.exec_time }}
 
     - name: "Executing ChartMuseum script/job"
       if: inputs.script != ''
       shell: bash
       run: |
         # Executing ChartMuseum script/job
-        if [ -x "${{ inputs.script }}" ]; then
-          echo "Executing script: ${{ inputs.script }} ☸️" \
+        if [ -x "${INPUTS_SCRIPT}" ]; then
+          echo "Executing script: ${INPUTS_SCRIPT} ☸️" \
             >> "$GITHUB_STEP_SUMMARY"
-          echo "Executing script: ${{ inputs.script }} ☸️"
+          echo "Executing script: ${INPUTS_SCRIPT} ☸️"
           # Export container ID as environment variable for the script
-          export cid="${{ env.cid }}"
-          "./${{ inputs.script }}" "${{ inputs.password }}"
+          export cid="${cid}"
+          # Run absolute script paths as-is; prefix relative paths with
+          # ./ so '[ -x ... ]' and execution resolve to the same file.
+          case "${INPUTS_SCRIPT}" in
+            /*) script_cmd="${INPUTS_SCRIPT}" ;;
+            *) script_cmd="./${INPUTS_SCRIPT}" ;;
+          esac
+          "${script_cmd}" "${INPUTS_PASSWORD}"
         else
           echo "Error: script/job path was not executable ❌" \
             >> "$GITHUB_STEP_SUMMARY"
           echo "Error: script/job path was not executable ❌"
-          echo "Running: docker kill ${{ env.cid }}"
-          timeout 30 docker kill "${{ env.cid }}"
+          echo "Running: docker kill ${cid}"
+          timeout 30 docker kill "${cid}"
           # Clean up container ID file after termination
           rm -f /tmp/chartmuseum.cid
           echo "Terminated Chartmuseum Container 🛑"
           exit 1
         fi
+      env:
+        INPUTS_SCRIPT: ${{ inputs.script }}
+        INPUTS_PASSWORD: ${{ inputs.password }}
+        cid: ${{ steps.chartmuseum.outputs.cid }}
 
     - name: "Terminate container when finished"
       if: inputs.exit == 'true'
       shell: bash
       run: |
         # Terminate container when finished with cache preservation
-        echo "Running: docker kill ${{ env.cid }}"
-        timeout 30 docker kill "${{ env.cid }}"
+        echo "Running: docker kill ${cid}"
+        timeout 30 docker kill "${cid}"
         echo "Terminated Chartmuseum Container 🛑"
 
         # Clean up container ID file after termination
         rm -f /tmp/chartmuseum.cid
 
         # Preserve Docker layers in cache for next run
-        if [ "${{ inputs.enable_cache }}" = "true" ]; then
+        if [ "${INPUTS_ENABLE_CACHE}" = "true" ]; then
           echo "Preserving Docker layers in cache for faster subsequent runs"
           docker system prune -f --filter "until=24h" \
             --filter "label!=keep-cache" || true
         fi
+      env:
+        INPUTS_ENABLE_CACHE: ${{ inputs.enable_cache }}
+        cid: ${{ steps.chartmuseum.outputs.cid }}
 
     - name: "Container will continue/persist"
       if: inputs.exit != 'true'
