@@ -38,6 +38,8 @@ jobs:
       - name: 'Checkout repository'
         # yamllint disable-line rule:line-length
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+        with:
+          persist-credentials: false
 
       # Cache Docker layers for ChartMuseum container (aligned with action)
       - name: 'Cache Docker layers'
@@ -56,10 +58,12 @@ jobs:
       # Pre-pull ChartMuseum Docker image for caching
       - name: 'Pre-pull ChartMuseum Docker image'
         shell: bash
+        env:
+          CHARTMUSEUM_VERSION: ${{ env.chartmuseum-version }}
         run: |
           # Pre-pull ChartMuseum Docker image
           echo "Pre-pulling ChartMuseum Docker image for caching..."
-          docker pull ghcr.io/helm/chartmuseum:${{ env.chartmuseum-version }}
+          docker pull "ghcr.io/helm/chartmuseum:$CHARTMUSEUM_VERSION"
           echo "ChartMuseum image cached successfully ✅"
 
       - name: 'Create local job to execute'
@@ -133,9 +137,11 @@ jobs:
 
       - name: "Verify background container still running and accessible"
         shell: bash
+        env:
+          GITHUB_TOKEN: ${{ secrets.github_token }}
+          CONTAINER_ID: ${{ steps.persistent_container.outputs.cid }}
         run: |
           # Verify background container still running and accessible
-          CONTAINER_ID="${{ steps.persistent_container.outputs.cid }}"
           echo "Container ID from action output: $CONTAINER_ID"
 
           if [ -z "$CONTAINER_ID" ]; then
@@ -163,7 +169,7 @@ jobs:
             "$CONTAINER_ID")
           echo "Testing accessibility on container IP: $CONTAINER_IP"
 
-          if curl -f -s -m 5 -u "chartmuseum:${{ secrets.github_token }}" \
+          if curl -f -s -m 5 -u "chartmuseum:$GITHUB_TOKEN" \
             "http://$CONTAINER_IP:8083/index.yaml" > /dev/null; then
             echo "✅ ChartMuseum service is accessible and responding correctly!"
           else
@@ -183,6 +189,8 @@ jobs:
       - name: 'Checkout repository'
         # yamllint disable-line rule:line-length
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+        with:
+          persist-credentials: false
 
       # Cache Docker layers for ChartMuseum container (aligned with action)
       - name: 'Cache Docker layers'
@@ -200,10 +208,12 @@ jobs:
       # Pre-pull ChartMuseum Docker image for caching
       - name: 'Pre-pull ChartMuseum Docker image'
         shell: bash
+        env:
+          CHARTMUSEUM_VERSION: ${{ env.chartmuseum-version }}
         run: |
           # Pre-pull ChartMuseum Docker image
           echo "Pre-pulling ChartMuseum Docker image for caching..."
-          docker pull ghcr.io/helm/chartmuseum:${{ env.chartmuseum-version }}
+          docker pull "ghcr.io/helm/chartmuseum:$CHARTMUSEUM_VERSION"
           echo "ChartMuseum image cached successfully ✅"
 
       # Install Helm for chart operations
@@ -394,6 +404,8 @@ jobs:
       - name: 'Checkout repository'
         # yamllint disable-line rule:line-length
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+        with:
+          persist-credentials: false
 
       # Check if act is available and install if possible
       - name: 'Setup nektos/act for local testing'
@@ -424,13 +436,15 @@ jobs:
       # Run the workflow locally with act
       - name: 'Test workflow with nektos/act'
         shell: bash
+        env:
+          GITHUB_TOKEN: ${{ secrets.github_token }}
         run: |
           # Test workflow with nektos/act
           if command -v act &> /dev/null; then
             echo "Running workflow tests with nektos/act..."
 
             # Create a minimal .env file for act if needed
-            echo "GITHUB_TOKEN=${{ secrets.github_token }}" > .env
+            echo "GITHUB_TOKEN=$GITHUB_TOKEN" > .env
 
             # Run only the basic tests job with act
             echo "Testing basic functionality with act..."
