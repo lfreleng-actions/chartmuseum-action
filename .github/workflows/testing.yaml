@@ -382,7 +382,7 @@ jobs:
         shell: bash
         run: |
           # Cleanup: Terminate the persistent ChartMuseum container
-          CONTAINER_ID="${{ steps.upload_test_container.outputs.cid }}"
+          CONTAINER_ID="${STEPS_UPLOAD_TEST_CONTAINER_OUTPUTS_CID}"
 
           if [ -n "$CONTAINER_ID" ]; then
             echo "Cleaning up ChartMuseum container: $CONTAINER_ID"
@@ -392,6 +392,9 @@ jobs:
           else
             echo "No container ID available, cleanup not required"
           fi
+        env:
+          # yamllint disable-line rule:line-length
+          STEPS_UPLOAD_TEST_CONTAINER_OUTPUTS_CID: ${{ steps.upload_test_container.outputs.cid }}
 
   ### Test with nektos/act locally (optional) ###
   test-with-act:
