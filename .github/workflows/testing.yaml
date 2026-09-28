@@ -32,15 +32,10 @@ jobs:
   tests:
     name: 'Test local GitHub Action'
     runs-on: 'ubuntu-latest'
+    timeout-minutes: 10
     permissions:
       contents: read
     steps:
-      - name: 'Checkout repository'
-        # yamllint disable-line rule:line-length
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
-        with:
-          persist-credentials: false
-
       # Cache Docker layers for ChartMuseum container (aligned with action)
       - name: 'Cache Docker layers'
         # yamllint disable-line rule:line-length
@@ -75,7 +70,7 @@ jobs:
           echo 'echo "ChartMuseum job from: testing.yaml 🧪"' >> job.sh
 
       - name: "Running local action: ${{ github.repository }} [Run for 5s]"
-        uses: ./
+        uses: $/
         with:
           password: "${{ secrets.github_token }}"
           port: 8081
@@ -87,7 +82,7 @@ jobs:
           helm_repo_name: ''
 
       - name: "Running local action: ${{ github.repository }} [Run script]"
-        uses: ./
+        uses: $/
         with:
           password: "${{ secrets.github_token }}"
           port: 8080
@@ -97,7 +92,7 @@ jobs:
           helm_repo_name: ''
 
       - name: "Running local action: ${{ github.repository }} [Failure test]"
-        uses: ./
+        uses: $/
         id: failure
         with:
           password: "${{ secrets.github_token }}"
@@ -121,7 +116,7 @@ jobs:
 
       - name: "Running local action: ${{ github.repository }} [Run script]"
         id: persistent_container
-        uses: ./
+        uses: $/
         with:
           password: "${{ secrets.github_token }}"
           port: 8083
@@ -183,15 +178,10 @@ jobs:
   test-chart-upload:
     name: 'Test Helm Chart Upload'
     runs-on: 'ubuntu-latest'
+    timeout-minutes: 10
     permissions:
       contents: read
     steps:
-      - name: 'Checkout repository'
-        # yamllint disable-line rule:line-length
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
-        with:
-          persist-credentials: false
-
       # Cache Docker layers for ChartMuseum container (aligned with action)
       - name: 'Cache Docker layers'
         # yamllint disable-line rule:line-length
@@ -339,7 +329,7 @@ jobs:
       # Start ChartMuseum service and run upload test
       - name: "Test chart upload to ChartMuseum"
         id: upload_test_container
-        uses: ./
+        uses: $/
         with:
           password: "${{ secrets.github_token }}"
           port: 8084
@@ -400,6 +390,7 @@ jobs:
   test-with-act:
     name: 'Test with nektos/act'
     runs-on: 'ubuntu-latest'
+    timeout-minutes: 10
     continue-on-error: true  # This is optional and may not be available
     permissions:
       contents: read
