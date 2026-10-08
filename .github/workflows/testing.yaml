@@ -15,11 +15,6 @@ on:
     branches: ['main']
   pull_request:
     branches: ['main']
-    paths:
-      - '**'
-      - '!.github/**'
-      - '!.*'
-      - '!tox.ini'
 
 concurrency:
   group: "${{ github.workflow }}-${{ github.ref }}"
@@ -385,66 +380,3 @@ jobs:
         env:
           # yamllint disable-line rule:line-length
           STEPS_UPLOAD_TEST_CONTAINER_OUTPUTS_CID: ${{ steps.upload_test_container.outputs.cid }}
-
-  ### Test with nektos/act locally (optional) ###
-  test-with-act:
-    name: 'Test with nektos/act'
-    runs-on: 'ubuntu-latest'
-    timeout-minutes: 10
-    continue-on-error: true  # This is optional and may not be available
-    permissions:
-      contents: read
-    steps:
-      - name: 'Checkout repository'
-        # yamllint disable-line rule:line-length
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
-        with:
-          persist-credentials: false
-
-      # Check if act is available and install if possible
-      - name: 'Setup nektos/act for local testing'
-        shell: bash
-        run: |
-          # Setup nektos/act for local testing
-          echo "Checking for nektos/act availability..."
-
-          # Try to install act using the official installation script
-          if command -v curl &> /dev/null; then
-            echo "Installing nektos/act..."
-            curl -s \
-              https://raw.githubusercontent.com/nektos/act/master/install.sh | \
-              sudo bash
-
-            if command -v act &> /dev/null; then
-              echo "nektos/act installed successfully! ✅"
-              act --version
-            else
-              echo "nektos/act installation failed, but continuing..."
-              exit 0
-            fi
-          else
-            echo "curl not available, skipping act installation"
-            exit 0
-          fi
-
-      # Run the workflow locally with act
-      - name: 'Test workflow with nektos/act'
-        shell: bash
-        env:
-          GITHUB_TOKEN: ${{ secrets.github_token }}
-        run: |
-          # Test workflow with nektos/act
-          if command -v act &> /dev/null; then
-            echo "Running workflow tests with nektos/act..."
-
-            # Create a minimal .env file for act if needed
-            echo "GITHUB_TOKEN=$GITHUB_TOKEN" > .env
-
-            # Run only the basic tests job with act
-            echo "Testing basic functionality with act..."
-            act -j tests --env-file .env -v || true
-
-            echo "nektos/act testing completed (errors expected in CI env)"
-          else
-            echo "nektos/act not available, skipping testing 🛑"
-          fi
