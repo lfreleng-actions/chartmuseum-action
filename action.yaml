@@ -317,7 +317,7 @@ runs:
     - name: "Check service availability"
       if: inputs.check_service == 'true'
       # yamllint disable-line rule:line-length
-      uses: lfreleng-actions/http-api-tool-docker@1a44737b6c3b1d3341d5491641bb03727a072a63 # v1.1.2
+      uses: lfreleng-actions/http-api-tool-docker@f4ee5b9d44acced243a34b596eca50fc89b7e255  # v1.1.4
       with:
         # yamllint disable-line rule:line-length
         url: "http://${{ steps.chartmuseum.outputs.container_ip }}:${{ inputs.port }}/health"
